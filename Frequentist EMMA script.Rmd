@@ -160,8 +160,8 @@ png(file = paste0(output,"/","Forest plot ", outcome, ".png"),
 
 forest(meta,
        layout = "Revman5",
-       label.e = "EVT", 
-       label.c = "BMT", 
+       label.e = "MMAE", 
+       label.c = "SOC", 
        label.left = lbl_left,   # Uses dynamic variable
        label.right = lbl_right,
        leftcols = c("studlab",
