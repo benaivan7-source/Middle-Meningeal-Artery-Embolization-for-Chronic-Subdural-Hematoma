@@ -1,0 +1,577 @@
+---
+title: "Middle Meningeal Artery Embolization in Chronic Subdural Hematoma: A Systematic Review and Frequentist–Bayesian Meta-Analysis of Randomised Controlled Trials"
+author: "Joseph Yvan Bena Nnang"
+format: html
+editor_options: 
+  chunk_output_type: inline
+---
+
+# Packages
+
+```{r}
+if (!require("devtools")) install.packages("devtools")
+if (!require("pacman")) install.packages("pacman")
+
+if (!requireNamespace("BayesianPriorsTool", quietly = TRUE)) {
+  devtools::install_github("arthur-albuquerque/BayesianPriorsTool")
+}
+
+other_packages <- c("bayesmeta", "BayesianPriorsTool", "dplyr", "tidyr", 
+                    "metafor", "ggdist", "ggplot2", "patchwork", "gt", 
+                    "readxl", "rstudioapi")
+
+meta_version <- if (requireNamespace("meta", quietly = TRUE)) {
+  packageVersion("meta")
+} else {
+  "0.0-0"
+}
+
+if (meta_version > "7.0-0") {
+  remotes::install_version("meta", "7.0-0")
+  pacman::p_load(char =  c("meta", other_packages))
+} else if (meta_version == "7.0-0") {
+  pacman::p_load(char = c("meta", other_packages))
+} else {
+  remotes::install_version("meta", "7.0-0")
+  pacman::p_load(char = c("meta", other_packages))
+}
+
+```
+
+```{r}
+theme_set(
+  theme(
+    plot.title.position = 'plot',
+    axis.ticks.x = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.title.x = element_text(size = 14),
+    panel.background = element_blank(),
+    panel.grid.major.x = element_line(color = "gray80", linewidth = 0.3)
+  )
+)
+
+```
+
+###Choose your output folder
+```{r}
+output <- selectDirectory()
+```
+
+
+### Configuration Switch: Define Active Outcome
+
+```{r}
+
+active_outcome_key <- "mrs_0_2"  # options: "mrs_0_2", "mortality", "recur"
+
+outcome_config <- switch(active_outcome_key,
+  "recur" = list(
+    name = "Hematoma recurrence",
+    turner_prior = "adverse events",
+    direction = "less",
+    enthusiastic_mean = -0.7,
+    favors_left = "Favors MMAE",
+    favors_right = "Favors SOC"
+  ),
+  "mrs_0_2" = list(
+    name = "Functional Independence (mRS 0-2)",
+    turner_prior = "quality of life / functioning (dichotomized)",
+    direction = "greater",
+    enthusiastic_mean = 0.7,
+    favors_left = "Favors SOC",
+    favors_right = "Favors MMAE"
+  ),
+  "mortality" = list(
+    name = "90-Day Mortality",
+    turner_prior = "all-cause mortality",
+    direction = "less",
+    enthusiastic_mean = -0.7,
+    favors_left = "Favors MMAE",
+    favors_right = "Favors SOC"
+  ),
+  "complications" = list(
+    name = "Procedural complications",
+    turner_prior = "surgical / device related success / failure",
+    direction = "less",
+    enthusiastic_mean = -0.7,
+    favors_left = "Favors MMAE",
+    favors_right = "Favors SOC"
+  ),
+  list(
+    name = "Default Outcome",
+    turner_prior = "adverse events",
+    direction = "less",
+    enthusiastic_mean = -0.7,
+    favors_left = "Favors MMAE",
+    favors_right = "Favors SOC"
+  )
+)
+
+active_outcome_name <- outcome_config$name
+active_turner_category <- outcome_config$turner_prior
+
+```
+
+### Data Loading & Effect Size Estimation
+
+```{r}
+myfile <- selectFile(caption = "choose data")
+mwd <- dirname(myfile)
+sheet_names <- excel_sheets(myfile)
+  
+ma <- lapply(sheet_names, function(x) {as.data.frame(read_excel(myfile, sheet = x))})
+names(ma) <- sheet_names
+
+data_active <- ma[[active_outcome_key]]
+
+data_active_OR = escalc(measure="OR",
+                ai=event.e, n1i=n.e, ci=event.c, n2i=n.c,
+                data=data_active) |> data.frame()
+
+data_active_OR$sei = sqrt(data_active_OR$vi)
+
+```
+
+### Priors Definition
+
+```{r}
+# Mu Priors
+prior_mu_sceptical_mean = 0
+prior_mu_sceptical_sd = 0.5
+
+prior_mu_enthusiastic_mean = outcome_config$enthusiastic_mean
+prior_mu_enthusiastic_sd = 0.5
+
+# Tau Priors: (i) Informative (Turner et al.)
+informative_tau_prior_OR =
+  TurnerEtAlPrior(outcome = active_turner_category, 
+                comparator1 = "non-pharmacological",
+                comparator2 = "placebo / control")
+
+# Tau Priors: (ii) Weakly Informative (Half-Cauchy(0, 0.5))
+weakly_prior_OR_scale = 0.5
+weakly_tau_OR_prior = function(x) {
+  # Half-Cauchy PDF
+  ifelse(x < 0, 0, 2 / (pi * weakly_prior_OR_scale * (1 + (x / weakly_prior_OR_scale)^2)))
+}
+
+```
+
+### Fitting the 4 Models according to the Analysis Plan
+
+```{r}
+# (i) Primary / (iii) Sceptical: mu ~ N(0, 0.5^2), tau ~ Informative (Turner)
+meta_active_primary =
+  bayesmeta(y = data_active_OR$yi, sigma = data_active_OR$sei, labels = data_active_OR$author,
+            mu.prior.mean = prior_mu_sceptical_mean, mu.prior.sd = prior_mu_sceptical_sd,
+            tau.prior = informative_tau_prior_OR$dprior)
+
+# (ii) Weakly Informative tau: mu ~ N(0, 0.5^2), tau ~ Half-Cauchy(0, 0.5)
+meta_active_weakly =
+  bayesmeta(y = data_active_OR$yi, sigma = data_active_OR$sei, labels = data_active_OR$author,
+            mu.prior.mean = prior_mu_sceptical_mean, mu.prior.sd = prior_mu_sceptical_sd,
+            tau.prior = weakly_tau_OR_prior)
+
+# (iv) Enthusiastic prior: mu ~ N(-0.7, 0.5^2), tau ~ Informative (Turner)
+meta_active_enthusiastic =
+  bayesmeta(y = data_active_OR$yi, sigma = data_active_OR$sei, labels = data_active_OR$author,
+            mu.prior.mean = prior_mu_enthusiastic_mean, mu.prior.sd = prior_mu_enthusiastic_sd,
+            tau.prior = informative_tau_prior_OR$dprior)
+
+```
+
+### Primary Analysis Visualizations
+
+```{r}
+png(file = paste0(output,"/","Overall effect ", active_outcome_name, ".png"),
+    width = 3000, height = 2500, res = 300)
+plot(meta_active_primary, which = 3, main = "Overall Effect (Primary/Sceptical)", prior = TRUE)                             
+dev.off() 
+
+png(file = paste0(output,"/","Between study heterogeneity ", active_outcome_name, ".png"),
+    width = 3000, height = 2500, res = 300)
+plot(meta_active_primary, which = 4, main = "Between-study Heterogeneity", prior = TRUE)                                   
+dev.off() 
+
+```
+
+### ------------------------------------------------------------------
+### Primary Analysis: Native Bayesian Forest Plot
+### ------------------------------------------------------------------
+
+```{r}
+
+# 1. Extract posterior summary statistics from your primary Bayesian model
+bayes_mu_mean  <- meta_active_primary$summary["mean", "mu"]
+bayes_mu_lower <- meta_active_primary$summary["95% lower", "mu"]
+bayes_mu_upper <- meta_active_primary$summary["95% upper", "mu"]
+
+# Extract median between-study heterogeneity (tau) and convert to character label
+bayes_tau_median <- round(meta_active_primary$summary["median", "tau"], 3)
+tau_label_text   <- paste0("Heterogeneity (Tau) = ", bayes_tau_median)
+
+# 2. Inject these values into your frequentist object to overwrite its summary line
+meta_forest_primary_revman <- metaadd(
+  forest_data_active, 
+  type  = "random", 
+  TE    = bayes_mu_mean, 
+  lower = bayes_mu_lower, 
+  upper = bayes_mu_upper
+)
+
+# 3. Open PNG device
+png(file = paste0(output, "/", "Bayesian Forest Plot Primary ", active_outcome_name, ".png"),
+    width = 4500, height = 2500, res = 300)
+
+# 4. Generate the structured RevMan5 plot using the modified object
+meta::forest(
+  meta_forest_primary_revman,
+  layout = "RevMan5",
+  sortvar = TE,           # Sorts cleanly by raw study effect size
+  text.random = "Bayesian Posterior",    # Relabels the summary diamond line
+  text.addline1 = tau_label_text,        # Dynamic, error-free heterogeneity text
+  smlab = "Odds Ratio",
+  
+  # Column Configurations
+  leftcols = c("studlab", "event.e", "n.e", "event.c", "n.c", "effect.ci"),
+  leftlabs = c("Study", "Events", "Total", "Events", "Total", "OR (95% CrI)"),
+  label.left = outcome_config$favors_left, 
+  label.right = outcome_config$favors_right,
+  pooled.events = TRUE,
+  lab.e = "MMAE", 
+  lab.c = "SOC",
+  colgap = "5mm",
+  common = FALSE,                        # Strips the fixed-effect diamond out
+  random = TRUE                          # Keeps your forced Bayesian diamond visible
+)
+
+dev.off()
+```
+
+
+### Sensitivity Analysis: Forest Plots combining all Priors
+
+```{r}
+# Base frequentist data format for metaadd
+forest_data_active = metabin(
+    data = data_active_OR, studlab = author,
+    event.e = event.e, n.e = n.e, event.c = event.c, n.c = n.c, 
+    sm = "OR", common = FALSE, random = FALSE
+)
+
+# Extract Posteriors
+extract_posterior <- function(meta_obj) {
+  list(
+    mu_mean = meta_obj$summary["mean", "mu"],
+    mu_upper = meta_obj$summary["95% upper", "mu"],
+    mu_lower = meta_obj$summary["95% lower", "mu"],
+    theta_mean = meta_obj$summary["mean", "theta"],
+    theta_upper = meta_obj$summary["95% upper", "theta"],
+    theta_lower = meta_obj$summary["95% lower", "theta"]
+  )
+}
+
+post_primary <- extract_posterior(meta_active_primary)
+post_weakly <- extract_posterior(meta_active_weakly)
+post_enthusiastic <- extract_posterior(meta_active_enthusiastic)
+
+# Build metaadd objects for Overall Effect (mu)
+meta_forest_primary = metaadd(forest_data_active, type = "random", 
+                              TE = post_primary$mu_mean, upper = post_primary$mu_upper, lower = post_primary$mu_lower)  
+meta_forest_weakly = metaadd(forest_data_active, type = "random", 
+                             TE = post_weakly$mu_mean, upper = post_weakly$mu_upper, lower = post_weakly$mu_lower)  
+meta_forest_enthusiastic = metaadd(forest_data_active, type = "random", 
+                                   TE = post_enthusiastic$mu_mean, upper = post_enthusiastic$mu_upper, lower = post_enthusiastic$mu_lower)  
+
+
+# Combine for Plot (Dynamically reading the enthusiastic mean)
+analyses_labels = c(
+  "(i/iii) Sceptical / Primary prior [mu ~ N(0, 0.5²), tau ~ Turner]",
+  "(ii) Weakly Informative prior [mu ~ N(0, 0.5²), tau ~ Half-Cauchy(0, 0.5)]",
+  paste0("(iv) Enthusiastic prior [mu ~ N(", prior_mu_enthusiastic_mean, ", 0.5²), tau ~ Turner]")
+)
+
+all_active_analyses <- metabind(meta_forest_primary,
+                                meta_forest_weakly,
+                                meta_forest_enthusiastic,
+                                name = analyses_labels)
+
+png(file = paste0(output,"/","Forest plot sensitivity ", active_outcome_name, ".png"),
+    width = 4500, height = 3000, res = 300)
+
+meta::forest(all_active_analyses, 
+             smlab = "Overall Effect", 
+             leftcols ="studlab",
+             pooled.events = TRUE,
+             lab.e = "MMAE", lab.c = "SOC",
+             label.left = outcome_config$favors_left, 
+             label.right = outcome_config$favors_right,
+             colgap = "5mm")
+dev.off() 
+
+```
+
+### Sensitivity Analysis: Prediction Intervals
+
+```{r}
+# Build metaadd objects for Prediction Intervals (theta)
+meta_pred_primary = metaadd(forest_data_active, type = "prediction", 
+                            TE = post_primary$theta_mean, upper = post_primary$theta_upper, lower = post_primary$theta_lower)  
+meta_pred_weakly = metaadd(forest_data_active, type = "prediction", 
+                           TE = post_weakly$theta_mean, upper = post_weakly$theta_upper, lower = post_weakly$theta_lower)  
+meta_pred_enthusiastic = metaadd(forest_data_active, type = "prediction", 
+                                 TE = post_enthusiastic$theta_mean, upper = post_enthusiastic$theta_upper, lower = post_enthusiastic$theta_lower)  
+
+all_pred_analyses <- metabind(meta_pred_primary,
+                              meta_pred_weakly,
+                              meta_pred_enthusiastic,
+                              name = analyses_labels)
+
+png(file = paste0(output,"/","Prediction intervals sensitivity ", active_outcome_name, ".png"),
+    width = 4500, height = 3000, res = 300)
+
+meta::forest(all_pred_analyses, 
+             smlab = "Prediction Intervals", 
+             leftcols ="studlab",
+             label.left = outcome_config$favors_left, 
+             label.right = outcome_config$favors_right
+             )
+dev.off() 
+
+```
+
+
+
+### ------------------------------------------------------------------
+### Posterior Probabilities of Benefit 
+### ------------------------------------------------------------------
+
+```{r}
+# Determine whether we are calculating OR < 1 or OR > 1 based on the outcome type
+if (outcome_config$direction == "less") {
+  
+  # Probability of risk reduction (OR < 1)
+  prob_primary      = meta_active_primary$pposterior(mu = log(1))
+  prob_weakly       = meta_active_weakly$pposterior(mu = log(1))
+  prob_enthusiastic = meta_active_enthusiastic$pposterior(mu = log(1))
+  display_label     = "OR < 1"
+  
+} else {
+  
+  # Probability of clinical improvement (OR > 1) -> 1 minus the cumulative probability below 0
+  prob_primary      = 1 - meta_active_primary$pposterior(mu = log(1))
+  prob_weakly       = 1 - meta_active_weakly$pposterior(mu = log(1))
+  prob_enthusiastic = 1 - meta_active_enthusiastic$pposterior(mu = log(1))
+  display_label     = "OR > 1"
+  
+}
+
+cat("--- Posterior Probabilities of Clinical Benefit (", display_label, ") ---\n", sep = "")
+cat("Outcome: ", active_outcome_name, "\n")
+cat("(i/iii) Primary/Sceptical Model: ", round(prob_primary * 100, 2), "%\n")
+cat("(ii) Weakly Informative Model:   ", round(prob_weakly * 100, 2), "%\n")
+cat("(iv) Enthusiastic Model:         ", round(prob_enthusiastic * 100, 2), "%\n\n")
+
+```
+```{r}
+# Determine whether we are calculating OR < 1 or OR > 1 based on the outcome type
+if (outcome_config$direction == "less") {
+  
+  # Probability of risk reduction (OR < 1)
+  prob_primary      = meta_active_primary$pposterior(mu = log(0.5))
+  prob_weakly       = meta_active_weakly$pposterior(mu = log(0.5))
+  prob_enthusiastic = meta_active_enthusiastic$pposterior(mu = log(0.5))
+  display_label     = "OR < 0.5"
+  
+} else {
+  
+  # Probability of clinical improvement (OR > 1) -> 1 minus the cumulative probability below 0
+  prob_primary      = 1 - meta_active_primary$pposterior(mu = log(0.5))
+  prob_weakly       = 1 - meta_active_weakly$pposterior(mu = log(0.5))
+  prob_enthusiastic = 1 - meta_active_enthusiastic$pposterior(mu = log(0.5))
+  display_label     = "OR > 0.5"
+  
+}
+
+cat("--- Posterior Probabilities of Clinical Benefit (", display_label, ") ---\n", sep = "")
+cat("Outcome: ", active_outcome_name, "\n")
+cat("(i/iii) Primary/Sceptical Model: ", round(prob_primary * 100, 2), "%\n")
+cat("(ii) Weakly Informative Model:   ", round(prob_weakly * 100, 2), "%\n")
+cat("(iv) Enthusiastic Model:         ", round(prob_enthusiastic * 100, 2), "%\n\n")
+
+```
+
+
+
+```{r}
+# Determine whether we are calculating OR < 1 or OR > 1 based on the outcome type
+if (outcome_config$direction == "less") {
+  
+  # Probability of risk reduction (OR < 1)
+  prob_primary      = meta_active_primary$pposterior(mu = log(0.75))
+  prob_weakly       = meta_active_weakly$pposterior(mu = log(0.75))
+  prob_enthusiastic = meta_active_enthusiastic$pposterior(mu = log(0.75))
+  display_label     = "OR < 0.75"
+  
+} else {
+  
+  # Probability of clinical improvement (OR > 1) -> 1 minus the cumulative probability below 0
+  prob_primary      = 1 - meta_active_primary$pposterior(mu = log(0.75))
+  prob_weakly       = 1 - meta_active_weakly$pposterior(mu = log(0.75))
+  prob_enthusiastic = 1 - meta_active_enthusiastic$pposterior(mu = log(0.75))
+  display_label     = "OR > 0.75"
+  
+}
+
+cat("--- Posterior Probabilities of Clinical Benefit (", display_label, ") ---\n", sep = "")
+cat("Outcome: ", active_outcome_name, "\n")
+cat("(i/iii) Primary/Sceptical Model: ", round(prob_primary * 100, 2), "%\n")
+cat("(ii) Weakly Informative Model:   ", round(prob_weakly * 100, 2), "%\n")
+cat("(iv) Enthusiastic Model:         ", round(prob_enthusiastic * 100, 2), "%\n\n")
+
+```
+
+
+
+### ------------------------------------------------------------------
+### Posterior Distribution Visualizations (Density Plots)
+### ------------------------------------------------------------------
+
+```{r}
+# Extracting samples from the posterior distribution for visualization
+set.seed(123)
+n_samples = 10000
+
+samples_primary = meta_active_primary$rposterior(n = n_samples)[,"mu"]
+samples_weakly = meta_active_weakly$rposterior(n = n_samples)[,"mu"]
+samples_enthusiastic = meta_active_enthusiastic$rposterior(n = n_samples)[,"mu"]
+
+# Compiling into a single dataframe for ggplot
+posterior_data = bind_rows(
+  data.frame(Model = "(i/iii) Sceptical / Primary", Value = samples_primary),
+  data.frame(Model = "(ii) Weakly Informative", Value = samples_weakly),
+  data.frame(Model = "(iv) Enthusiastic", Value = samples_enthusiastic)
+)
+
+# Reordering factor levels so they plot in a logical sequence
+posterior_data$Model = factor(posterior_data$Model, 
+                              levels = c("(iv) Enthusiastic", 
+                                         "(ii) Weakly Informative", 
+                                         "(i/iii) Sceptical / Primary"))
+
+# Generating the Plot using ggdist
+plot_posteriors = ggplot(posterior_data, aes(x = Value, y = Model, fill = Model)) +
+  stat_halfeye(alpha = 0.7, .width = c(0.95), point_interval = "median_qi") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray30", linewidth = 0.8) +
+  labs(
+    title = paste("Posterior Distributions of Overall Effect -", active_outcome_name),
+    subtitle = "Comparing Sceptical, Weakly Informative, and Enthusiastic Priors",
+    x = "Log Odds Ratio (log-OR)",
+    y = NULL
+  ) +
+  scale_fill_manual(values = c("(iv) Enthusiastic" = "#4DB6AC", 
+                               "(ii) Weakly Informative" = "#7986CB", 
+                               "(i/iii) Sceptical / Primary" = "#E57373")) +
+  theme(legend.position = "none")
+
+# Save the plot
+png(file = paste0(output,"/","Posterior Distributions ", active_outcome_name, ".png"),
+    width = 3500, height = 2500, res = 300)
+print(plot_posteriors)
+dev.off()
+```
+
+
+### Savage-Dickey Density Ratio Computation (Primary/Sceptical Model)
+
+```{r}
+null_point <- 0 
+
+# Primary / Sceptical Model
+prior_dens_sceptical <- dnorm(null_point, mean = prior_mu_sceptical_mean, sd = prior_mu_sceptical_sd)
+post_dens_sceptical  <- meta_active_primary$dposterior(mu = null_point)
+BF01_sceptical       <- post_dens_sceptical / prior_dens_sceptical
+BF10_sceptical       <- prior_dens_sceptical / post_dens_sceptical
+
+# Enthusiastic Model
+prior_dens_enthusiastic <- dnorm(null_point, mean = prior_mu_enthusiastic_mean, sd = prior_mu_enthusiastic_sd)
+post_dens_enthusiastic  <- meta_active_enthusiastic$dposterior(mu = null_point)
+BF01_enthusiastic       <- post_dens_enthusiastic / prior_dens_enthusiastic
+BF10_enthusiastic       <- prior_dens_enthusiastic / post_dens_enthusiastic
+
+cat("--- Savage-Dickey Bayes Factor Results ---\n")
+cat("Outcome: ", active_outcome_name, "\n\n")
+cat("[Primary/Sceptical Prior Model]\n")
+cat("Bayes Factor BF10 (H1 vs H0): ", round(BF10_sceptical, 4), "\n")
+cat("Bayes Factor BF01 (H0 vs H1): ", round(BF01_sceptical, 4), "\n\n")
+cat("[Enthusiastic Prior Model]\n")
+cat("Bayes Factor BF10 (H1 vs H0): ", round(BF10_enthusiastic, 4), "\n")
+cat("Bayes Factor BF01 (H0 vs H1): ", round(BF01_enthusiastic, 4), "\n")
+
+```
+
+# Conceptual structure
+
+```{r}
+# Save the plot
+png(file = paste0(output,"/","Conceptual structure ", active_outcome_name, ".png"),
+    width = 3500, height = 2500, res = 300)
+
+ggplot() +
+  stat_function(fun = dnorm, args = list(mean=0, sd=0.5), aes(color="Prior")) +
+  geom_density(data=data.frame(x=samples_primary), aes(x, color="Posterior")) +
+  geom_vline(xintercept=0) # null point
+  
+  dev.off()
+```
+
+# 1. Compile the calculated probabilities into a structured dataframe
+
+```{r}
+prob_summary_data <- data.frame(
+  Model = c("(i/iii) Sceptical / Primary", 
+            "(ii) Weakly Informative", 
+            "(iv) Enthusiastic"),
+  Probability = c(prob_primary, prob_weakly, prob_enthusiastic) * 100
+)
+
+# 2. Maintain strict factor level ordering to match the density plots
+prob_summary_data$Model <- factor(
+  prob_summary_data$Model, 
+  levels = c("(iv) Enthusiastic", 
+             "(ii) Weakly Informative", 
+             "(i/iii) Sceptical / Primary")
+)
+
+# 3. Construct the Horizontal Bar Chart
+plot_probabilities <- ggplot(prob_summary_data, aes(x = Probability, y = Model, fill = Model)) +
+  geom_col(width = 0.6, alpha = 0.85, color = "white", linewidth = 0.5) +
+  # Add inline text percentage labels next to the bars
+  geom_text(aes(label = paste0(round(Probability, 2), "%")), 
+            hjust = -0.15, size = 4.5, fontface = "bold", color = "gray20") +
+  # Enforce a 0-100% axis layout with extra padding for labels
+  scale_x_continuous(limits = c(0, 115), breaks = seq(0, 100, 20), expand = c(0, 0)) +
+  labs(
+    title = paste("Posterior Probability of Clinical Benefit:", active_outcome_name),
+    subtitle = paste0("Threshold Criterion: Probability that true treatment effect satisfies ", display_label),
+    x = paste0("Probability (%, ", display_label, ")"),
+    y = NULL
+  ) +
+  scale_fill_manual(values = c("(iv) Enthusiastic" = "#4DB6AC", 
+                               "(ii) Weakly Informative" = "#7986CB", 
+                               "(i/iii) Sceptical / Primary" = "#E57373")) +
+  theme(
+    legend.position = "none",
+    panel.grid.major.x = element_line(color = "gray90", linewidth = 0.4),
+    axis.text.y = element_text(face = "bold", size = 11)
+  )
+
+# 4. Save high-resolution graphic asset for manuscript submission
+png(file = paste0(output, "/", "Posterior Probability Summary ", active_outcome_name, ".png"),
+    width = 3500, height = 2000, res = 300)
+print(plot_probabilities)
+dev.off()
+
+```
