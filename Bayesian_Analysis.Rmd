@@ -418,10 +418,10 @@ if (outcome_config$direction == "less") {
 } else {
   
   # Probability of clinical improvement (OR > 1) -> 1 minus the cumulative probability below 0
-  prob_primary      = 1 - meta_active_primary$pposterior(mu = log(0.75))
-  prob_weakly       = 1 - meta_active_weakly$pposterior(mu = log(0.75))
-  prob_enthusiastic = 1 - meta_active_enthusiastic$pposterior(mu = log(0.75))
-  display_label     = "OR > 0.75"
+  prob_primary      = 1 - meta_active_primary$pposterior(mu = log(1))
+  prob_weakly       = 1 - meta_active_weakly$pposterior(mu = log(1))
+  prob_enthusiastic = 1 - meta_active_enthusiastic$pposterior(mu = log(1))
+  display_label     = "OR > 1"
   
 }
 
