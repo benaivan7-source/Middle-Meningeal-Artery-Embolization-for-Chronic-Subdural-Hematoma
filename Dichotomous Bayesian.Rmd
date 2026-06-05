@@ -162,7 +162,7 @@ weakly_tau_OR_prior = function(x) {
 ### Fitting the 4 Models according to the Analysis Plan
 
 ```{r}
-# (i) Primary / (iii) Sceptical: mu ~ N(0, 0.5^2), tau ~ Informative (Turner)
+# (i) Primary / Sceptical: mu ~ N(0, 0.5^2), tau ~ Informative (Turner)
 meta_active_primary =
   bayesmeta(y = data_active_OR$yi, sigma = data_active_OR$sei, labels = data_active_OR$author,
             mu.prior.mean = prior_mu_sceptical_mean, mu.prior.sd = prior_mu_sceptical_sd,
@@ -174,7 +174,7 @@ meta_active_weakly =
             mu.prior.mean = prior_mu_sceptical_mean, mu.prior.sd = prior_mu_sceptical_sd,
             tau.prior = weakly_tau_OR_prior)
 
-# (iv) Enthusiastic prior: mu ~ N(-0.7, 0.5^2), tau ~ Informative (Turner)
+# (iii) Enthusiastic prior: mu ~ N(-0.7, 0.5^2), tau ~ Informative (Turner)
 meta_active_enthusiastic =
   bayesmeta(y = data_active_OR$yi, sigma = data_active_OR$sei, labels = data_active_OR$author,
             mu.prior.mean = prior_mu_enthusiastic_mean, mu.prior.sd = prior_mu_enthusiastic_sd,
@@ -288,9 +288,9 @@ meta_forest_enthusiastic = metaadd(forest_data_active, type = "random",
 
 # Combine for Plot (Dynamically reading the enthusiastic mean)
 analyses_labels = c(
-  "(i/iii) Sceptical / Primary prior [mu ~ N(0, 0.5²), tau ~ Turner]",
+  "(i) Sceptical / Primary prior [mu ~ N(0, 0.5²), tau ~ Turner]",
   "(ii) Weakly Informative prior [mu ~ N(0, 0.5²), tau ~ Half-Cauchy(0, 0.5)]",
-  paste0("(iv) Enthusiastic prior [mu ~ N(", prior_mu_enthusiastic_mean, ", 0.5²), tau ~ Turner]")
+  paste0("(iii) Enthusiastic prior [mu ~ N(", prior_mu_enthusiastic_mean, ", 0.5²), tau ~ Turner]")
 )
 
 all_active_analyses <- metabind(meta_forest_primary,
@@ -370,9 +370,9 @@ if (outcome_config$direction == "less") {
 
 cat("--- Posterior Probabilities of Clinical Benefit (", display_label, ") ---\n", sep = "")
 cat("Outcome: ", active_outcome_name, "\n")
-cat("(i/iii) Primary/Sceptical Model: ", round(prob_primary * 100, 2), "%\n")
+cat("(i) Primary/Sceptical Model: ", round(prob_primary * 100, 2), "%\n")
 cat("(ii) Weakly Informative Model:   ", round(prob_weakly * 100, 2), "%\n")
-cat("(iv) Enthusiastic Model:         ", round(prob_enthusiastic * 100, 2), "%\n\n")
+cat("(iii) Enthusiastic Model:         ", round(prob_enthusiastic * 100, 2), "%\n\n")
 
 ```
 ```{r}
@@ -397,9 +397,9 @@ if (outcome_config$direction == "less") {
 
 cat("--- Posterior Probabilities of Clinical Benefit (", display_label, ") ---\n", sep = "")
 cat("Outcome: ", active_outcome_name, "\n")
-cat("(i/iii) Primary/Sceptical Model: ", round(prob_primary * 100, 2), "%\n")
+cat("(i) Primary/Sceptical Model: ", round(prob_primary * 100, 2), "%\n")
 cat("(ii) Weakly Informative Model:   ", round(prob_weakly * 100, 2), "%\n")
-cat("(iv) Enthusiastic Model:         ", round(prob_enthusiastic * 100, 2), "%\n\n")
+cat("(iii) Enthusiastic Model:         ", round(prob_enthusiastic * 100, 2), "%\n\n")
 
 ```
 
@@ -427,9 +427,9 @@ if (outcome_config$direction == "less") {
 
 cat("--- Posterior Probabilities of Clinical Benefit (", display_label, ") ---\n", sep = "")
 cat("Outcome: ", active_outcome_name, "\n")
-cat("(i/iii) Primary/Sceptical Model: ", round(prob_primary * 100, 2), "%\n")
+cat("(i) Primary/Sceptical Model: ", round(prob_primary * 100, 2), "%\n")
 cat("(ii) Weakly Informative Model:   ", round(prob_weakly * 100, 2), "%\n")
-cat("(iv) Enthusiastic Model:         ", round(prob_enthusiastic * 100, 2), "%\n\n")
+cat("(iii) Enthusiastic Model:         ", round(prob_enthusiastic * 100, 2), "%\n\n")
 
 ```
 
@@ -450,16 +450,16 @@ samples_enthusiastic = meta_active_enthusiastic$rposterior(n = n_samples)[,"mu"]
 
 # Compiling into a single dataframe for ggplot
 posterior_data = bind_rows(
-  data.frame(Model = "(i/iii) Sceptical / Primary", Value = samples_primary),
+  data.frame(Model = "(i) Sceptical / Primary", Value = samples_primary),
   data.frame(Model = "(ii) Weakly Informative", Value = samples_weakly),
-  data.frame(Model = "(iv) Enthusiastic", Value = samples_enthusiastic)
+  data.frame(Model = "(iii) Enthusiastic", Value = samples_enthusiastic)
 )
 
 # Reordering factor levels so they plot in a logical sequence
 posterior_data$Model = factor(posterior_data$Model, 
-                              levels = c("(iv) Enthusiastic", 
+                              levels = c("(iii) Enthusiastic", 
                                          "(ii) Weakly Informative", 
-                                         "(i/iii) Sceptical / Primary"))
+                                         "(i) Sceptical / Primary"))
 
 # Generating the Plot using ggdist
 plot_posteriors = ggplot(posterior_data, aes(x = Value, y = Model, fill = Model)) +
@@ -471,9 +471,9 @@ plot_posteriors = ggplot(posterior_data, aes(x = Value, y = Model, fill = Model)
     x = "Log Odds Ratio (log-OR)",
     y = NULL
   ) +
-  scale_fill_manual(values = c("(iv) Enthusiastic" = "#4DB6AC", 
+  scale_fill_manual(values = c("(iii) Enthusiastic" = "#4DB6AC", 
                                "(ii) Weakly Informative" = "#7986CB", 
-                               "(i/iii) Sceptical / Primary" = "#E57373")) +
+                               "(i) Sceptical / Primary" = "#E57373")) +
   theme(legend.position = "none")
 
 # Save the plot
@@ -531,18 +531,18 @@ ggplot() +
 
 ```{r}
 prob_summary_data <- data.frame(
-  Model = c("(i/iii) Sceptical / Primary", 
+  Model = c("(i) Sceptical / Primary", 
             "(ii) Weakly Informative", 
-            "(iv) Enthusiastic"),
+            "(iii) Enthusiastic"),
   Probability = c(prob_primary, prob_weakly, prob_enthusiastic) * 100
 )
 
 # 2. Maintain strict factor level ordering to match the density plots
 prob_summary_data$Model <- factor(
   prob_summary_data$Model, 
-  levels = c("(iv) Enthusiastic", 
+  levels = c("(iii) Enthusiastic", 
              "(ii) Weakly Informative", 
-             "(i/iii) Sceptical / Primary")
+             "(i) Sceptical / Primary")
 )
 
 # 3. Construct the Horizontal Bar Chart
@@ -559,9 +559,9 @@ plot_probabilities <- ggplot(prob_summary_data, aes(x = Probability, y = Model, 
     x = paste0("Probability (%, ", display_label, ")"),
     y = NULL
   ) +
-  scale_fill_manual(values = c("(iv) Enthusiastic" = "#4DB6AC", 
+  scale_fill_manual(values = c("(iii) Enthusiastic" = "#4DB6AC", 
                                "(ii) Weakly Informative" = "#7986CB", 
-                               "(i/iii) Sceptical / Primary" = "#E57373")) +
+                               "(i) Sceptical / Primary" = "#E57373")) +
   theme(
     legend.position = "none",
     panel.grid.major.x = element_line(color = "gray90", linewidth = 0.4),
