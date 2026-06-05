@@ -1,2 +1,99 @@
 # Middle-Meningeal-Artery-Embolization-for-Chronic-Subdural-Hematoma
-To ensure full transparency and computational reproducibility, the extracted dataset, the specific empirical priors utilized, and the customized analytical pipelines (R scripts executing both the Frequentist and Bayesian frameworks) used in this meta-analysis are publicly available at this repository.
+
+
+[![R Version](https://img.shields.io/badge/R-%E2%89%A54.4.2-blue.svg)](https://cran.r-project.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+## Overview
+This repository contains the complete analytical pipeline and replication code for the manuscript: **"Bayesian Reappraisal of Middle Meningeal Artery Embolization for Chronic Subdural Hematoma: A Hierarchical Meta-Analysis with Savage-Dickey Bayes Factors."** The scripts provided here execute a dual-methodology synthesis (Frequentist and Bayesian) of summary data from dedicated randomized controlled trials (RCTs) comparing Middle Meningeal Artery Embolization (MMAE) versus Standard of care (SOC) for Chronic Subdural Hematoma (CSDH).
+
+### Evaluated Clinical Endpoints
+1. **Functional Independence** (Modified Rankin Scale 0–2 at 90 days)
+2. **Hematoma Recurrence**
+3. **All-Cause Mortality**
+
+---
+
+## Methodological Highlights
+
+### Frequentist Framework
+* **Estimator:** Restricted Maximum Likelihood (REML) for between-study heterogeneity ($\tau^2$).
+* **Variance Adjustment:** Hartung-Knapp-Sidik-Jonkman (HK) adjustment to account for small-study effects ($k=3$).
+* **Sensitivity:** Built-in comparisons of $\tau^2$ estimates across REML, DerSimonian–Laird (DL), and Paule–Mandel (PM) estimators.
+* **Outputs:** Odds Ratios (OR), 95% Confidence Intervals, Prediction Intervals, and Leave-one-out sensitivity analyses.
+
+### Bayesian Framework
+* **Prior Selection:** Utilizes objective, empirical priors mapped to the specific clinical nature of the endpoints using the `TurnerEtAlPrior` function (e.g., mapping hematoma recurrence to "adverse events" and mRS_0_2 to "quality of life / functioning").
+* **Sensitivity Analyses:** Compares the informative Turner prior against weakly informative Half-Normal priors.
+* **Evidence Quantification:** Calculates exact Savage-Dickey density ratios to generate Bayes Factors ($BF_{10}$ and $BF_{01}$), providing robust quantification of evidence for the null versus alternative hypotheses.
+* **Outputs:** Posterior distributions, 95% Credible Intervals (CrI), and cumulative density function (CDF) probabilities for clinically meaningful benefit/harm thresholds.
+
+---
+
+## Repository Structure
+
+* `Frequentist_Analysis.R` - Executes the REML/HK frequentist models and generates dynamic forest plots.
+  
+* `Bayesian_Analysis.R` - Executes the Bayesian random-effects models, posterior probability calculations, and distribution visualizations for all-cause mortality.
+    
+* `EMMA_outcomes.xlsx` -  The required structure for the summary data input.
+* `Data_Extraction_Sheet.xlsx` -  The required extracted data by the two authors.
+
+---
+
+## Prerequisites and Installation
+
+The scripts are highly automated and feature built-in package management. Upon running the scripts, the `pacman` package will automatically install and load the necessary dependencies. 
+
+**Core Dependencies:**
+* `meta` (Locked to version 8.3-0 in frequentist analysis and 7.0-0 in Bayesian analysis for reproducibility)
+* `bayesmeta`
+* `BayesianPriorsTool` (Installed via GitHub)
+* `tidyverse` (Data wrangling and `ggplot2`)
+* `rstudioapi` & `readxl` (Interactive data loading)
+
+*Note: Ensure you have an active internet connection on the first run so the script can fetch any missing packages from CRAN and GitHub.*
+
+---
+
+## Usage Instructions
+
+Both the Frequentist and Bayesian scripts utilize a "Single-Switch Control Panel" to automate analysis across different endpoints.
+
+**Step 1: Run the Setup Chunk**
+Execute blocks `#001` and `#002` to configure the environment and load dependencies.
+
+**Step 2: Import Data and Select Output**
+Execute blocks `#003.1` through `#003.3`. 
+* A prompt will appear asking you to select your Excel data file.
+* A second prompt will ask you to designate a folder where all generated high-resolution plots (.png) will be saved.
+
+**Step 3: Define the Active Outcome**
+Navigate to block `#004`. Change the `active_outcome` string to the endpoint you wish to analyze. The script will automatically route the correct data sheet, plot labels, and clinical directionality (e.g., ensuring OR > 1 correctly favors MMAE for mRS, but favors SOC for mortality).
+
+
+# Set ONLY this value before running the analysis pipeline
+active_outcome <- "mortality"   # options: "mrs_0_2", "mortality", "recur"
+
+**Step 4: Execute Pipeline**
+Run the remainder of the script. Forest plots, posterior density plots, and leave-one-out diagnostic graphics will be automatically formatted, labeled, and exported to your chosen directory.
+
+**Data Structure Requirement**
+To use these scripts with your own data, ensure your Excel workbook has separate sheets for each outcome (e.g., named mortality, recur, mrs_0_2). Each sheet must contain the following column headers:
+
+* author: Study identifier (e.g., EMMA-CAN, MEMBRANE)
+
+* event.e: Number of events in the MMAE (experimental) arm
+
+* n.e: Total patients in the MMAE arm
+
+* event.c: Number of events in the SOC (control) arm
+
+* n.c: Total patients in the SOC arm
+
+Author
+Joseph Y. Bena Nnang
+Faculty of Medicine and Biomedical Sciences, University of Yaounde I, Yaounde, Cameroon.
+Contact: benaivan7@gmail.com
+
+```R
