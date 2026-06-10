@@ -37,7 +37,10 @@ This repository contains the complete analytical pipeline and replication code f
 * `Bayesian_Analysis.R` - Executes the Bayesian random-effects models, posterior probability calculations, and distribution visualizations for all-cause mortality.
     
 * `EMMA_outcomes.xlsx` -  The required structure for the summary data input.
+  
 * `Data_Extraction_Sheet.xlsx` -  The required extracted data by the two authors.
+  
+* Bayesian Meta-regression_Analysis.R - Executes the Bayesian meta-regression for the Liquid vs Microsphere embolic agents subgroups.
 
 ---
 
