@@ -1,0 +1,329 @@
+---
+title: "Bayesian Subgroup Analysis & Sensitivity Pipeline"
+output: html_document
+---
+
+# 1. Package Installation and Setup
+```{r setup, message=FALSE, warning=FALSE}
+if (!require("devtools")) install.packages("devtools")
+if (!require("pacman")) install.packages("pacman")
+if (!require("readxl")) install.packages("readxl")
+if (!require("rstudioapi")) install.packages("rstudioapi")
+
+# Ensure Arthur Albuquerque's prior tool is installed
+if (!require("BayesianPriorsTool")) {
+  devtools::install_github("arthur-albuquerque/BayesianPriorsTool")
+}
+
+other_packages <- c("bayesmeta", "BayesianPriorsTool", "dplyr", "tidyr", 
+                    "metafor", "ggdist", "ggplot2", "patchwork", "gt", "readxl", "rstudioapi")
+
+# Ensure meta v7.0-0 is used to maintain compatibility with metaadd/metabind layout
+meta_version <- if (requireNamespace("meta", quietly = TRUE)) packageVersion("meta") else "0.0-0"
+if (meta_version != "7.0-0") {
+  remotes::install_version("meta", "7.0-0", upgrade = "never")
+}
+pacman::p_load(char = c("meta", other_packages))
+
+# Set universal ggplot theme
+theme_set(
+  theme(
+    plot.title.position = 'plot',
+    axis.ticks.x = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.title.x = element_text(size = 14),
+    panel.background = element_blank(),
+    panel.grid.major.x = element_line(color = "gray80", linewidth = 0.3)
+  )
+)
+
+```
+
+# 2. UI & Outcome Configuration
+
+```{r config}
+library(rstudioapi)
+
+output_dir <- selectDirectory(caption = "Select Output Directory")
+active_outcome_key = "recur"  # Options: "mrs_0_2", "mortality", "recur"
+
+outcome_config <- switch(active_outcome_key,
+  "recur" = list(
+    name = "Hematoma recurrence",
+    turner_prior = "adverse events",
+    direction = "less",
+    enthusiastic_mean = -0.7,
+    favors_left = "Favors MMAE",
+    favors_right = "Favors SOC"
+  ),
+  "mrs_0_2" = list(
+    name = "Functional Independence (mRS 0-2)",
+    turner_prior = "quality of life / functioning (dichotomized)",
+    direction = "greater",
+    enthusiastic_mean = 0.7,
+    favors_left = "Favors SOC",
+    favors_right = "Favors MMAE"
+  ),
+  "mortality" = list(
+    name = "90-Day Mortality",
+    turner_prior = "all-cause mortality",
+    direction = "less",
+    enthusiastic_mean = -0.7,
+    favors_left = "Favors MMAE",
+    favors_right = "Favors SOC"
+  )
+)
+
+active_outcome_name <- outcome_config$name
+active_turner_category <- outcome_config$turner_prior
+
+```
+
+# 3. Data Loading & Prior Parameter Extraction
+
+```{r data_loading}
+myfile <- selectFile(caption = "Choose data Excel file")
+sheet_names <- excel_sheets(myfile)
+  
+ma <- lapply(sheet_names, function(x) { as.data.frame(read_excel(myfile, sheet = x)) })
+names(ma) <- sheet_names
+
+data_active <- ma[[active_outcome_key]]
+
+# Fetch empirical Turner prior parameters
+tau_prior_obj <- TurnerEtAlPrior(
+  outcome = active_turner_category,
+  comparator1 = "non-pharmacological",
+  comparator2 = "placebo / control"
+)
+
+extracted_tau_mean <- tau_prior_obj$parameters["tau", "mu"]
+extracted_tau_sd <- tau_prior_obj$parameters["tau", "sigma"]
+
+```
+
+# 4. Master Analysis & Plotting Pipeline Function
+
+```{r pipeline_definition}
+run_bayesian_subgroup <- function(data, outcome_name, output_dir, prior_tau_mean, prior_tau_sd, config) {
+  
+  message(paste0("\n--- Processing Outcome: ", outcome_name, " ---"))
+  
+  # Calculate Effect Sizes (Log Odds Ratio)
+  dat_OR <- escalc(measure = "OR",
+                   ai = event.e, n1i = n.e, 
+                   ci = event.c, n2i = n.c,
+                   slab = author, data = data) |> data.frame()
+                   
+  dat_OR$sei <- sqrt(dat_OR$vi)
+  
+  # Data Cleaning & Factor Level Matching
+  dat_OR$Subgroup <- factor(dat_OR$Subgroup, levels = c("Microspheres", "Liquid"))
+  dat_OR <- dat_OR[!is.na(dat_OR$Subgroup) & !is.na(dat_OR$yi) & !is.na(dat_OR$sei), ]
+  
+  if(nrow(dat_OR) == 0) {
+    stop("ERROR: All rows were dropped. Check spelling of your subgroup levels in Excel.")
+  }
+  
+  matrix_subgroups <- stats::model.matrix(~Subgroup, data = dat_OR)
+  
+  # --- CONSTANT EFFECT PRIORS  ---
+  prior_sub0_mean <- 0
+  prior_sub0_sd   <- 0.5   
+  prior_beta_mean <- 0
+  prior_beta_sd   <- 0.82  # Weakly informative subgroup difference prior
+  
+  # --- HETEROGENEITY (TAU) PRIORS ---
+  # 1. Primary Analysis: Turner Log-Normal Prior
+  primary_tau_prior <- function(t) {
+    ifelse(t <= 0, 0, dlnorm(t, meanlog = prior_tau_mean, sdlog = prior_tau_sd))
+  }
+  
+  # 2. Sensitivity 1: Half-Cauchy Prior (Scale = 0.5)
+  half_cauchy_tau_prior <- function(t) {
+    ifelse(t <= 0, 0, 2 * dcauchy(t, location = 0, scale = 0.5))
+  }
+  
+  # 3. Sensitivity 2: Enthusiastic Prior for Tau (Assumes very low/minimal heterogeneity)
+  enthusiastic_tau_prior <- function(t) {
+    ifelse(t <= 0, 0, dexp(t, rate = 2))
+  }
+  
+  # 5. Fit Models (Main + 2 Sensitivity Models) -----------------------------
+  
+  # Model A: Primary Analysis Model (Turner Log-Normal Tau)
+  subgroup_model_main <- bmr(y = dat_OR$yi, sigma = dat_OR$sei, 
+                             labels = dat_OR$author, X = matrix_subgroups,
+                             beta.prior.mean = c(prior_sub0_mean, prior_beta_mean), 
+                             beta.prior.sd = c(prior_sub0_sd, prior_beta_sd),
+                             tau.prior = primary_tau_prior)
+  
+  # Model B: Sensitivity Analysis 1 (Half-Cauchy Prior for Heterogeneity Tau)
+  subgroup_model_hc <- bmr(y = dat_OR$yi, sigma = dat_OR$sei, 
+                            labels = dat_OR$author, X = matrix_subgroups,
+                            beta.prior.mean = c(prior_sub0_mean, prior_beta_mean), 
+                            beta.prior.sd = c(prior_sub0_sd, prior_beta_sd),
+                            tau.prior = half_cauchy_tau_prior)
+  
+  # Model C: Sensitivity Analysis 2 (Enthusiastic Prior for Heterogeneity Tau)
+  subgroup_model_enth <- bmr(y = dat_OR$yi, sigma = dat_OR$sei, 
+                             labels = dat_OR$author, X = matrix_subgroups,
+                             beta.prior.mean = c(prior_sub0_mean, prior_beta_mean), 
+                             beta.prior.sd = c(prior_sub0_sd, prior_beta_sd),
+                             tau.prior = enthusiastic_tau_prior)
+  
+  # Baseline Overall Model (No Moderator Subgroup)
+  overall_model <- bayesmeta(y = dat_OR$yi, sigma = dat_OR$sei, 
+                             labels = dat_OR$author,
+                             mu.prior.mean = prior_sub0_mean, 
+                             mu.prior.sd = prior_sub0_sd,
+                             tau.prior = primary_tau_prior)
+
+  # 6.Sampling and Statistics Extraction -----------------------------
+  set.seed(123)
+  
+  extract_subgroup_estimates <- function(model) {
+    samples <- model$rposterior(n = 10000, tau.sample = FALSE) |> data.frame()
+    df_sub <- data.frame(
+      Microspheres = samples$X.Intercept.,
+      Liquid = samples$X.Intercept. + samples$SubgroupLiquid
+    )
+    return(df_sub)
+  }
+  
+  samples_main_df <- extract_subgroup_estimates(subgroup_model_main)
+  samples_hc_df   <- extract_subgroup_estimates(subgroup_model_hc)
+  samples_enth_df <- extract_subgroup_estimates(subgroup_model_enth)
+  overall_samples <- overall_model$rposterior(n = 10000, tau.sample = FALSE)
+  
+  # Compute statistical points using valid ggdist variables (y, ymin, ymax)
+  get_stats <- function(vector_data) {
+    hdi_intervals <- mean_hdi(vector_data)
+    list(mean = hdi_intervals$y, lower = hdi_intervals$ymin, upper = hdi_intervals$ymax)
+  }
+  
+  m_stats <- get_stats(samples_main_df$Microspheres)
+  l_stats <- get_stats(samples_main_df$Liquid)
+  
+  hc_m_stats <- get_stats(samples_hc_df$Microspheres)
+  hc_l_stats <- get_stats(samples_hc_df$Liquid)
+  
+  enth_m_stats <- get_stats(samples_enth_df$Microspheres)
+  enth_l_stats <- get_stats(samples_enth_df$Liquid)
+
+  # Export Model summaries text file
+  sink(file.path(output_dir, paste0("1_Model_Summaries_", gsub(" ", "_", outcome_name), ".txt")))
+  cat("====================================================================\n")
+  cat("Bayesian Subgroup Meta-Regression Summaries: ", outcome_name, "\n")
+  cat("====================================================================\n\n")
+  cat("--- PRIMARY ANALYSIS MODEL (Turner Log-Normal Tau) ---\n")
+  print(subgroup_model_main$summary)
+  cat("\n\n--- SENSITIVITY ANALYSIS 1: HALF-CAUCHY TAU ---\n")
+  print(subgroup_model_hc$summary)
+  cat("\n\n--- SENSITIVITY ANALYSIS 2: ENTHUSIASTIC TAU ---\n")
+  print(subgroup_model_enth$summary)
+  sink()
+
+  # 7. Generate and Export Publication-Ready Plots ---------------------------
+  
+  forest_data_no_subgroup <- metabin(data = dat_OR, studlab = author,
+                                     common = FALSE, random = FALSE,
+                                     event.e = event.e, n.e = n.e,
+                                     event.c = event.c, n.c = n.c, sm = "OR")
+  
+  # --- SUBGROUP 0 (MICROSPHERES) SENSITIVITY FOREST PLOT ---
+  sub0_p1 <- metaadd(forest_data_no_subgroup, type = "random", TE = m_stats$mean, lower = m_stats$lower, upper = m_stats$upper)
+  sub0_p2 <- metaadd(forest_data_no_subgroup, type = "random", TE = hc_m_stats$mean, lower = hc_m_stats$lower, upper = hc_m_stats$upper)
+  sub0_p3 <- metaadd(forest_data_no_subgroup, type = "random", TE = enth_m_stats$mean, lower = enth_m_stats$lower, upper = enth_m_stats$upper)
+  
+  bind_sub0 <- metabind(sub0_p1, sub0_p2, sub0_p3, 
+                        name = c("Primary Analysis (Log-Normal Tau)", 
+                                 "Sensitivity 1 (Half-Cauchy Tau)", 
+                                 "Sensitivity 2 (Enthusiastic Tau)"))
+  
+  png(file.path(output_dir, paste0("3_Sensitivity_Forest_Microspheres_", gsub(" ", "_", outcome_name), ".png")), width = 3200, height = 2200, res = 300)
+  forest(bind_sub0, smlab = "Microspheres Subgroup Sensitivity", leftcols = "studlab", rightcols = c("effect", "ci"))
+  dev.off()
+  
+  # --- SUBGROUP 1 (LIQUID) SENSITIVITY FOREST PLOT ---
+  sub1_p1 <- metaadd(forest_data_no_subgroup, type = "random", TE = l_stats$mean, lower = l_stats$lower, upper = l_stats$upper)
+  sub1_p2 <- metaadd(forest_data_no_subgroup, type = "random", TE = hc_l_stats$mean, lower = hc_l_stats$lower, upper = hc_l_stats$upper)
+  sub1_p3 <- metaadd(forest_data_no_subgroup, type = "random", TE = enth_l_stats$mean, lower = enth_l_stats$lower, upper = enth_l_stats$upper)
+  
+  bind_sub1 <- metabind(sub1_p1, sub1_p2, sub1_p3, 
+                        name = c("Primary Analysis (Log-Normal Tau)", 
+                                 "Sensitivity 1 (Half-Cauchy Tau)", 
+                                 "Sensitivity 2 (Enthusiastic Tau)"))
+  
+  png(file.path(output_dir, paste0("4_Sensitivity_Forest_Liquid_", gsub(" ", "_", outcome_name), ".png")), width = 3200, height = 2200, res = 300)
+  forest(bind_sub1, smlab = "Liquid Subgroup Sensitivity", leftcols = "studlab", rightcols = c("effect", "ci"))
+  dev.off()
+  
+  # --- SUBGROUP DIFFERENCE (BETA DIST) PLOT ---
+  prob_lower_beta  <- mean(subgroup_model_main$rposterior(n = 10000)[, "SubgroupLiquid"] < log(1))
+  prob_upper_beta  <- 1 - prob_lower_beta
+  shade_lower_beta <- prob_lower_beta >= prob_upper_beta
+  chosen_prob_pct  <- round(max(prob_lower_beta, prob_upper_beta) * 100, 1)
+  beta_samples     <- data.frame(Beta = subgroup_model_main$rposterior(n = 10000)[, "SubgroupLiquid"])
+  
+  p_beta <- ggplot(beta_samples, aes(x = Beta, fill = after_stat(if (shade_lower_beta) x < log(1) else x > log(1)))) +
+    stat_slab() +
+    scale_fill_manual(values = c("gray90", "forestgreen")) +
+    geom_vline(xintercept = log(1), linetype = 2) +
+    annotate("text", x = quantile(beta_samples$Beta, if (shade_lower_beta) 0.05 else 0.95), y = 0.3, size = 6, label = paste0(chosen_prob_pct, "%")) +
+    scale_x_continuous(breaks = log(c(0.1, 0.2, 0.5, 1, 2, 5, 10)), labels = function(x) round(exp(x), 2)) +
+    coord_cartesian(x = log(c(0.1, 10))) +
+    labs(x = "\nRatio of Odds Ratios (log scale)", y = "Density", title = paste0("Subgroup Difference (Liquid vs Microspheres): ", outcome_name)) +
+    theme(axis.text.y = element_blank(), legend.position = "none")
+  
+  png(file.path(output_dir, paste0("2_Subgroup_Difference_", gsub(" ", "_", outcome_name), ".png")), width = 3000, height = 2500, res = 300)
+  print(p_beta)
+  dev.off()
+  
+  # --- COMBINED DENSITY & PROBABILITY PLOT ---
+  subgroup_overall_samples <- samples_main_df |> mutate(Overall = overall_samples) |> pivot_longer(everything()) |> 
+    mutate(name = factor(name, levels = c("Microspheres", "Liquid", "Overall")))
+  
+  p_density <- ggplot(subgroup_overall_samples, aes(x = value, fill = name)) +
+    stat_halfeye(.width = 0.95, point_interval = mean_hdi) +
+    scale_fill_manual(values = c("#EECE9C", "#BE6376", "#605A91")) +
+    scale_x_continuous(breaks = log(c(0.1, 0.25, 0.5, 0.75, 1, 1.5, 2)), labels = function(x) round(exp(x), 2)) +
+    coord_cartesian(x = log(c(0.1, 2))) +
+    labs(x = "\nOdds Ratio (log scale)", y = " ") +
+    facet_wrap(~name, ncol = 1) +
+    theme(axis.text.y = element_blank(), legend.position = "none", strip.text.x = element_text(size = 12))
+  
+  p_prob <- ggplot(subgroup_overall_samples, aes(exp(value), colour = name)) +
+    geom_line(aes(y = after_stat(y)), stat = 'ecdf', linewidth = 1.2) +
+    scale_color_manual(' ', values = c("#EECE9C", "#BE6376", "#605A91")) +
+    scale_x_continuous(breaks = seq(0, 2, 0.25)) +
+    coord_cartesian(x = c(0, 2)) +
+    labs(x = "\nOdds Ratio", y = expression("Probability OR" <= "X")) +
+    theme(panel.grid.major.y = element_line(color = "gray80", linewidth = 0.3), legend.position = "bottom")
+  
+  p_combined <- p_density + p_prob + plot_layout(ncol = 2)
+  
+  png(file.path(output_dir, paste0("5_Overall_Effect_Density_", gsub(" ", "_", outcome_name), ".png")), width = 3000, height = 2500, res = 300)
+  print(p_combined)
+  dev.off()
+  
+  message(paste0("Pipeline successfully finalized for: ", outcome_name))
+}
+
+```
+
+# 5. Pipeline Execution
+
+```{r execution}
+run_bayesian_subgroup(
+  data = data_active,
+  outcome_name = active_outcome_name,
+  output_dir = output_dir,
+  prior_tau_mean = extracted_tau_mean,
+  prior_tau_sd = extracted_tau_sd,
+  config = outcome_config
+)
+
+```
