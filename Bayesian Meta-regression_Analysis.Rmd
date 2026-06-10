@@ -1,6 +1,11 @@
 ---
-title: "Bayesian Subgroup Analysis & Sensitivity Pipeline"
-output: html_document
+title: "Middle Meningeal Artery Embolization in Chronic Subdural Hematoma: A Systematic Review and Frequentist–Bayesian Meta-Analysis of Randomised Controlled Trials"
+author: "Joseph Yvan Bena Nnang"
+format: html
+editor_options: 
+  chunk_output_type: inline
+---
+
 ---
 
 # 1. Package Installation and Setup
