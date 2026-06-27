@@ -1,6 +1,5 @@
 ---
-title: "Endovascular Treatment for Medium and Distal Vessel Occlusion Strokes:
-A Systematic Review and Frequentist–Bayesian Meta-Analysis of Randomised Controlled Trials"
+title: "Middle Meningeal Artery Embolization in Chronic Subdural Hematoma: A Systematic Review and Frequentist–Bayesian Meta-Analysis of Randomised Controlled Trials"
 author: "Joseph Yvan Bena Nnang"
 format: html
 editor_options: 
